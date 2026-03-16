@@ -45,3 +45,12 @@ export const videoFileUrl = (videoId) =>
   `${BASE}/api/data/video_file/${videoId}`
 
 export default api
+
+// 人物轨迹追踪
+export const searchTrajectory = (file, threshold = 0.20, topK = 100) => {
+  const fd = new FormData()
+  fd.append('image', file)
+  fd.append('threshold', threshold)
+  fd.append('top_k', topK)
+  return api.post('/api/search/trajectory', fd)
+}

@@ -22,7 +22,12 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, expose_headers=[
+    "Content-Range",
+    "Accept-Ranges",
+    "Content-Length",
+    "Content-Type",
+])
 
 # 注册蓝图
 from backend.api.routes.search  import search_bp

@@ -145,18 +145,19 @@ def stream_video_file(video_id: int):
                     remaining -= len(data)
                     yield data
 
-        headers = {
-            "Content-Range":  f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges":  "bytes",
-            "Content-Length": str(length),
-            "Content-Type":   mime,
-        }
-        return Response(
+        resp = Response(
             generate(str(file_path), start, length),
             status=206,
-            headers=headers,
-            direct_passthrough=True,
+            mimetype=mime,
         )
+        resp.headers["Content-Range"]  = f"bytes {start}-{end}/{file_size}"
+        resp.headers["Accept-Ranges"]  = "bytes"
+        resp.headers["Content-Length"] = str(length)
+        resp.headers["Cache-Control"]  = "no-cache"
+        # 让浏览器 JS 能读到这些头（CORS 限制下必须显式暴露）
+        resp.headers["Access-Control-Expose-Headers"] = \
+            "Content-Range, Accept-Ranges, Content-Length, Content-Type"
+        return resp
 
     except Exception as e:
         logger.error(f"视频流失败: {e}", exc_info=True)

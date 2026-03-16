@@ -197,7 +197,12 @@ export default function Monitor() {
               key={playVideoId}
               src={videoFileUrl(playVideoId)}
               controls
+              muted
               autoPlay
+              crossOrigin="anonymous"
+              preload="auto"
+              onLoadedMetadata={e => e.target.play().catch(()=>{})}
+              onError={e => console.error('video error', e.target.error)}
               style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', display: 'block' }}
             />
           ) : mode === 'file' ? (
