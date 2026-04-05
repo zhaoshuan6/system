@@ -66,7 +66,7 @@ class VideoProcessor:
         try:
             from ultralytics import YOLO
             logger.info("加载 YOLOv8 检测模型...")
-            self._detector = YOLO("yolov8n.pt")
+            self._detector = YOLO("yolov8x.pt")
             logger.info("✅ YOLOv8 加载成功")
         except ImportError:
             raise ImportError("未安装 ultralytics，请运行: pip install ultralytics")

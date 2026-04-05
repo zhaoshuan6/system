@@ -13,11 +13,36 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from PIL import Image
+from backend.api.routes.auth import login_required
 
 logger = logging.getLogger(__name__)
 search_bp = Blueprint("search", __name__)
+
+
+def _save_history(search_type: str, result_count: int,
+                  query_text: str = None, query_image: str = None):
+    """搜索成功后记录历史，失败不影响主流程。"""
+    try:
+        from backend.database.db import get_session
+        from backend.database.models import SearchHistory
+        session = get_session()
+        try:
+            record = SearchHistory(
+                user_id      = g.current_user["user_id"],
+                username     = g.current_user["username"],
+                search_type  = search_type,
+                query_text   = query_text,
+                query_image  = query_image,
+                result_count = result_count,
+            )
+            session.add(record)
+            session.commit()
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"记录搜索历史失败（不影响搜索结果）: {e}")
 
 QUERY_DIR = Path("data/uploads/queries")
 QUERY_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,6 +65,17 @@ def get_clip():
         _clip_model.eval()
         logger.info(f"✅ CLIP 加载完成，设备: {_device}")
     return _clip_model, _clip_preprocess, _device
+
+
+_yolo_model = None
+
+def get_yolo():
+    global _yolo_model
+    if _yolo_model is None:
+        from ultralytics import YOLO
+        _yolo_model = YOLO("yolov8x.pt")
+        logger.info("✅ YOLOv8x 加载完成")
+    return _yolo_model
 
 
 _feature_index = None
@@ -112,8 +148,7 @@ def format_results(raw_results: list) -> list:
 def _crop_main_person(image: Image.Image) -> Image.Image:
     try:
         import cv2
-        from ultralytics import YOLO
-        model = YOLO("yolov8n.pt")
+        model = get_yolo()
         img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         results = model(img_bgr, classes=[0], verbose=False)
         boxes = results[0].boxes
@@ -135,6 +170,7 @@ def _crop_main_person(image: Image.Image) -> Image.Image:
 # ----------------------------------------------------------------
 
 @search_bp.route("/text", methods=["POST"])
+@login_required
 def search_by_text():
     if request.is_json:
         data = request.get_json()
@@ -153,6 +189,7 @@ def search_by_text():
             return jsonify({"success": False, "error": "索引为空，请先上传并处理视频"}), 400
         raw = index.search_and_group_by_video(feat, top_k=top_k * 5)
         results = format_results(raw[:top_k])
+        _save_history("text", len(results), query_text=query)
         return jsonify({"success": True, "query": query, "count": len(results), "results": results})
     except Exception as e:
         logger.error(f"文字搜图失败: {e}", exc_info=True)
@@ -164,6 +201,7 @@ def search_by_text():
 # ----------------------------------------------------------------
 
 @search_bp.route("/image", methods=["POST"])
+@login_required
 def search_by_image():
     if "image" not in request.files:
         return jsonify({"success": False, "error": "请上传图片文件"}), 400
@@ -186,6 +224,7 @@ def search_by_image():
             return jsonify({"success": False, "error": "索引为空，请先上传并处理视频"}), 400
         raw = index.search_and_group_by_video(feat, top_k=top_k * 5)
         results = format_results(raw[:top_k])
+        _save_history("image", len(results), query_image=str(save_path))
         return jsonify({
             "success": True,
             "count": len(results),
@@ -202,6 +241,7 @@ def search_by_image():
 # ----------------------------------------------------------------
 
 @search_bp.route("/trajectory", methods=["POST"])
+@login_required
 def search_trajectory():
     """
     上传人物图片，返回该人物在所有摄像头的完整时间线轨迹。
@@ -294,6 +334,7 @@ def search_trajectory():
                     node["score"]      = t["score"]
                     node["frame_path"] = t["frame_path"]
 
+        _save_history("trajectory", len(location_nodes), query_image=str(save_path))
         return jsonify({
             "success":           True,
             "total_appearances": len(trajectory),

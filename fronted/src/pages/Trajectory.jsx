@@ -5,11 +5,9 @@ import {
   ClockCircleOutlined, EnvironmentOutlined, UserOutlined,
   PauseCircleOutlined
 } from '@ant-design/icons'
-import { frameUrl } from '../api.js'
-import axios from 'axios'
+import { frameUrl, searchTrajectory } from '../api.js'
 
 const { Dragger } = Upload
-const BASE = 'http://localhost:5000'
 
 // ── 预设摄像头坐标（归一化 0~1，可按实际校园地图调整）──
 const LOCATION_COORDS = {
@@ -56,11 +54,7 @@ export default function Trajectory() {
     clearInterval(timerRef.current)
 
     try {
-      const fd = new FormData()
-      fd.append('image', file)
-      fd.append('threshold', threshold)
-      fd.append('top_k', 100)
-      const { data } = await axios.post(`${BASE}/api/search/trajectory`, fd)
+      const { data } = await searchTrajectory(file, threshold, 100)
 
       if (!data.success) {
         message.error(data.error || '搜索失败')
