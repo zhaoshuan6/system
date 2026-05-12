@@ -16,6 +16,8 @@ data/videos/
 data/MOT17/
 data/processed/
 data/uploads/
+tests/test_data/*.mp4
+tests/test_data/*.avi
 *.pkl
 *.h5
 *.hdf5
