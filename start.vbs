@@ -10,6 +10,9 @@ Dim backendLog, frontendLog
 backendLog  = dir & "\logs\backend.log"
 frontendLog = dir & "\logs\frontend.log"
 
+' Kill any existing process on port 5000 (old backend) before starting fresh
+shell.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -ano ^| findstr "":5000 ""') do taskkill /f /pid %a", 0, True
+
 Dim backendCmd, frontendCmd
 backendCmd  = "cmd /c cd /d """ & dir & """ && C:\anconda\envs\video_retrieval\python.exe run.py > """ & backendLog & """ 2>&1"
 frontendCmd = "cmd /c cd /d """ & dir & "\fronted"" && npm run dev > """ & frontendLog & """ 2>&1"

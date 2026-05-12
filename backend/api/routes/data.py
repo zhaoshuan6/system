@@ -351,20 +351,41 @@ def delete_video(video_id: int):
 def _rebuild_search_index() -> int:
     from backend.database.db import get_session
     from backend.models.feature_index import FeatureIndex
-    from config import FAISS_CONFIG
+    from config import FAISS_CONFIG, REID_CONFIG
     import backend.api.routes.search as search_module
 
     search_module._feature_index = None
+    search_module._reid_index    = None  # 使 search 模块重新加载
+
     session = get_session()
     try:
-        index = FeatureIndex(
+        # ── CLIP 索引（文字搜图用）──
+        clip_idx = FeatureIndex(
             dim=FAISS_CONFIG["dim"],
             index_path=FAISS_CONFIG["index_path"],
         )
-        count = index.build_from_db(session)
+        count = clip_idx.build_from_db(session)
         if count > 0:
-            index.save()
-        logger.info(f"FAISS 索引重建完成，共 {count} 条向量")
+            clip_idx.save()
+        logger.info(f"CLIP 索引重建完成，共 {count} 条向量")
+
+        # ── ReID 索引（以图搜图 / 轨迹追踪用）──
+        try:
+            import importlib.util
+            if importlib.util.find_spec("torchreid") is None:
+                raise ImportError("torchreid 未安装")
+            from backend.models.reid_index import ReidIndex
+            reid_idx = ReidIndex(
+                dim=REID_CONFIG["dim"],
+                index_path=REID_CONFIG["index_path"],
+            )
+            reid_count = reid_idx.build_from_db(session)
+            if reid_count > 0:
+                reid_idx.save()
+            logger.info(f"ReID 索引重建完成，共 {reid_count} 条向量")
+        except Exception as e:
+            logger.warning(f"ReID 索引重建失败（以图搜图将降级为 CLIP）: {e}")
+
         return count
     finally:
         session.close()

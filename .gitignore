@@ -12,15 +12,19 @@ ENV/
 .ipynb_checkpoints
 
 # 数据文件
-data/videos/*.mp4
-data/videos/*.avi
+data/videos/
 data/MOT17/
 data/processed/
+data/uploads/
 *.pkl
 *.h5
 *.hdf5
 
-# 模型文件
+# FAISS 索引（自动生成，运行时重建）
+*.index
+*.meta.pkl
+
+# 模型文件（体积过大）
 *.pt
 *.pth
 *.onnx
@@ -33,6 +37,9 @@ weights/
 # 日志
 *.log
 logs/
+
+# Claude Code 记忆文件
+.claude/
 
 # VS Code
 .vscode/

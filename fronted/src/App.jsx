@@ -64,8 +64,8 @@ export default function App() {
   if (!user) {
     return (
       <ConfigProvider locale={zhCN} theme={{
-        algorithm: theme.darkAlgorithm,
-        token: { colorPrimary: '#00d4ff', colorBgBase: '#080c14', borderRadius: 6,
+        algorithm: theme.defaultAlgorithm,
+        token: { colorPrimary: '#1677ff', borderRadius: 6,
                  fontFamily: "'Noto Sans SC', sans-serif" }
       }}>
         <Login onLogin={handleLogin} />
@@ -99,8 +99,8 @@ export default function App() {
 
   return (
     <ConfigProvider locale={zhCN} theme={{
-      algorithm: theme.darkAlgorithm,
-      token: { colorPrimary: '#00d4ff', colorBgBase: '#080c14', borderRadius: 6,
+      algorithm: theme.defaultAlgorithm,
+      token: { colorPrimary: '#1677ff', borderRadius: 6,
                fontFamily: "'Noto Sans SC', sans-serif" }
     }}>
       <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
@@ -111,6 +111,7 @@ export default function App() {
           background: 'var(--bg-panel)',
           borderRight: '1px solid var(--border)',
           display: 'flex', flexDirection: 'column',
+          boxShadow: '2px 0 8px rgba(0,0,0,.06)',
         }}>
           {/* Logo */}
           <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border)' }}>

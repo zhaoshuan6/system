@@ -3,9 +3,15 @@ import { Upload, Button, Slider, Tag, message, Spin, Modal } from 'antd'
 import {
   InboxOutlined, PlayCircleOutlined, ReloadOutlined,
   ClockCircleOutlined, EnvironmentOutlined, UserOutlined,
-  PauseCircleOutlined
+  PauseCircleOutlined, AimOutlined,
 } from '@ant-design/icons'
-import { frameUrl, searchTrajectory } from '../api.js'
+import { frameUrl, searchTrajectory, detectPersons, searchTrajectoryByKey } from '../api.js'
+
+// 检测框颜色池
+const PERSON_COLORS = [
+  '#ff4d4f', '#1677ff', '#52c41a', '#fa8c16',
+  '#722ed1', '#13c2c2', '#eb2f96', '#fadb14',
+]
 
 const { Dragger } = Upload
 
@@ -35,31 +41,157 @@ export default function Trajectory() {
   const [preview, setPreview]     = useState(null)
   const [threshold, setThreshold] = useState(0.20)
   const [loading, setLoading]     = useState(false)
-  const [result, setResult]       = useState(null)      // API 返回数据
-  const [animStep, setAnimStep]   = useState(0)         // 当前动画到第几个节点
+  const [result, setResult]       = useState(null)
+  const [animStep, setAnimStep]   = useState(0)
   const [playing, setPlaying]     = useState(false)
   const [enlarged, setEnlarged]   = useState(null)
 
-  const canvasRef  = useRef(null)
-  const timerRef   = useRef(null)
-  const animRef    = useRef({ step: 0, progress: 0 })  // 箭头绘制进度
+  // 人物检测状态
+  const [detecting, setDetecting]   = useState(false)
+  const [imageKey, setImageKey]     = useState(null)
+  const [persons, setPersons]       = useState([])
 
-  // ── 搜索 ──
-  const handleSearch = async () => {
-    if (!file) return message.warning('请先上传人物图片')
+  const canvasRef      = useRef(null)   // 轨迹地图 canvas
+  const detectCanvasRef = useRef(null)  // 人物检测 canvas
+  const timerRef       = useRef(null)
+  const animRef        = useRef({ step: 0, progress: 0 })
+
+  // 检测 canvas 专用 refs
+  const detectImgRef    = useRef(null)
+  const detectScaleRef  = useRef(1)
+  const detectHovRef    = useRef(-1)
+  const detectSelRef    = useRef(-1)
+  const detectPersonsRef = useRef([])
+
+  // ── 检测 Canvas 绘制 ──
+  const redrawDetectCanvas = useCallback(() => {
+    const canvas = detectCanvasRef.current
+    const img    = detectImgRef.current
+    if (!canvas || !img) return
+    const ctx   = canvas.getContext('2d')
+    const scale = detectScaleRef.current
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+    detectPersonsRef.current.forEach((p, i) => {
+      const [x1, y1, x2, y2] = p.bbox.map(v => Math.round(v * scale))
+      const color      = PERSON_COLORS[i % PERSON_COLORS.length]
+      const isHovered  = i === detectHovRef.current
+      const isSelected = i === detectSelRef.current
+
+      ctx.fillStyle = color + (isHovered ? '55' : isSelected ? '44' : '22')
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1)
+      ctx.strokeStyle = color
+      ctx.lineWidth   = (isHovered || isSelected) ? 3 : 2
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
+
+      const label  = `P${i + 1}  ${(p.confidence * 100).toFixed(0)}%`
+      ctx.font     = 'bold 11px monospace'
+      const labelW = ctx.measureText(label).width + 10
+      const labelH = 18
+      const labelY = y1 >= labelH ? y1 - labelH : y1
+      ctx.fillStyle = color
+      ctx.fillRect(x1, labelY, labelW, labelH)
+      ctx.fillStyle    = '#ffffff'
+      ctx.textAlign    = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(label, x1 + 5, labelY + labelH / 2)
+    })
+  }, [])
+
+  // 图片加载
+  useEffect(() => {
+    if (!preview) { detectImgRef.current = null; return }
+    const img = new Image()
+    img.onload = () => {
+      detectImgRef.current = img
+      if (detectPersonsRef.current.length > 0 && detectCanvasRef.current) {
+        const cw    = detectCanvasRef.current.clientWidth || 228
+        const scale = cw / img.naturalWidth
+        detectScaleRef.current        = scale
+        detectCanvasRef.current.width  = cw
+        detectCanvasRef.current.height = Math.round(img.naturalHeight * scale)
+        redrawDetectCanvas()
+      }
+    }
+    img.src = preview
+  }, [preview, redrawDetectCanvas])
+
+  // persons 更新后初始化检测 canvas
+  useEffect(() => {
+    detectPersonsRef.current = persons
+    if (!persons.length || !detectImgRef.current || !detectCanvasRef.current) return
+    const img   = detectImgRef.current
+    const cw    = detectCanvasRef.current.clientWidth || 228
+    const scale = cw / img.naturalWidth
+    detectScaleRef.current        = scale
+    detectCanvasRef.current.width  = cw
+    detectCanvasRef.current.height = Math.round(img.naturalHeight * scale)
+    detectHovRef.current = -1
+    detectSelRef.current = -1
+    redrawDetectCanvas()
+  }, [persons, redrawDetectCanvas])
+
+  // ── 检测 Canvas 鼠标事件 ──
+  const getDetectPersonAt = useCallback((e) => {
+    const canvas = detectCanvasRef.current
+    if (!canvas || !detectPersonsRef.current.length) return -1
+    const rect  = canvas.getBoundingClientRect()
+    const mx    = (e.clientX - rect.left) * (canvas.width / rect.width)
+    const my    = (e.clientY - rect.top)  * (canvas.height / rect.height)
+    const ps    = detectPersonsRef.current
+    for (let i = ps.length - 1; i >= 0; i--) {
+      const [x1, y1, x2, y2] = ps[i].bbox.map(v => Math.round(v * detectScaleRef.current))
+      if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2) return i
+    }
+    return -1
+  }, [])
+
+  const handleDetectMouseMove = useCallback((e) => {
+    const idx = getDetectPersonAt(e)
+    if (idx !== detectHovRef.current) {
+      detectHovRef.current = idx
+      if (detectCanvasRef.current)
+        detectCanvasRef.current.style.cursor = idx >= 0 ? 'pointer' : 'default'
+      redrawDetectCanvas()
+    }
+  }, [getDetectPersonAt, redrawDetectCanvas])
+
+  const handleDetectMouseLeave = useCallback(() => {
+    detectHovRef.current = -1
+    if (detectCanvasRef.current) detectCanvasRef.current.style.cursor = 'default'
+    redrawDetectCanvas()
+  }, [redrawDetectCanvas])
+
+  // 点击人物框 → 立即触发轨迹搜索（普通函数，每次渲染都拿最新 imageKey/threshold）
+  const handleDetectClick = async (e) => {
+    const idx = getDetectPersonAt(e)
+    if (idx < 0) return
+    detectSelRef.current = idx
+    redrawDetectCanvas()
+    const person = detectPersonsRef.current[idx]
+    await doTrajectorySearch(imageKey, person.bbox)
+  }
+
+  // ── 核心搜索逻辑 ──
+  const doTrajectorySearch = async (key, bbox) => {
     setLoading(true)
     setResult(null)
     setAnimStep(0)
     setPlaying(false)
     clearInterval(timerRef.current)
-
     try {
-      const { data } = await searchTrajectory(file, threshold, 100)
-
-      if (!data.success) {
-        message.error(data.error || '搜索失败')
+      let resp
+      if (key && bbox) {
+        resp = await searchTrajectoryByKey(key, bbox, threshold, 100)
+      } else if (file) {
+        resp = await searchTrajectory(file, threshold, 100)
+      } else {
+        message.warning('请先上传人物图片')
         return
       }
+      const data = resp.data
+      if (!data.success) { message.error(data.error || '搜索失败'); return }
       if (data.total_appearances === 0) {
         message.info(data.message || '未找到该人物的轨迹')
         setResult(data)
@@ -71,6 +203,17 @@ export default function Trajectory() {
       message.error(`搜索失败: ${e?.response?.data?.error || e.message}`)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // "开始追踪"按钮（无人物时的兜底，或已选人物后重新搜索）
+  const handleSearch = async () => {
+    if (!file) return message.warning('请先上传人物图片')
+    const selIdx = detectSelRef.current
+    if (imageKey && selIdx >= 0 && detectPersonsRef.current.length > 0) {
+      await doTrajectorySearch(imageKey, detectPersonsRef.current[selIdx].bbox)
+    } else {
+      await doTrajectorySearch(null, null)
     }
   }
 
@@ -132,10 +275,12 @@ export default function Trajectory() {
     const W = canvas.width
     const H = canvas.height
     const ctx = canvas.getContext('2d')
-    ctx.clearRect(0, 0, W, H)
+    // 白色背景
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, W, H)
 
-    // 背景网格
-    ctx.strokeStyle = '#1e2d45'
+    // 背景网格（浅灰）
+    ctx.strokeStyle = '#e8e8e8'
     ctx.lineWidth = 1
     for (let x = 0; x <= W; x += 60) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke() }
     for (let y = 0; y <= H; y += 60) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke() }
@@ -144,12 +289,12 @@ export default function Trajectory() {
     Object.entries(LOCATION_COORDS).forEach(([name, coord]) => {
       const lx = coord.x * W, ly = coord.y * H
       const isActive = nodes.some(n => n.camera_location === name)
-      ctx.fillStyle = isActive ? '#1a2a3a' : '#0f1820'
-      ctx.strokeStyle = isActive ? '#2a4060' : '#1e2d45'
-      ctx.lineWidth = 1
+      ctx.fillStyle = isActive ? '#e6f4ff' : '#fafafa'
+      ctx.strokeStyle = isActive ? '#1677ff' : '#d9d9d9'
+      ctx.lineWidth = isActive ? 1.5 : 1
       ctx.beginPath(); ctx.roundRect(lx - 36, ly - 13, 72, 26, 4); ctx.fill(); ctx.stroke()
-      ctx.fillStyle = isActive ? '#5588aa' : '#2a3a4a'
-      ctx.font = '11px IBM Plex Mono, monospace'
+      ctx.fillStyle = isActive ? '#1677ff' : '#bfbfbf'
+      ctx.font = 'bold 11px Noto Sans SC, sans-serif'
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
       ctx.fillText(name.length > 7 ? name.slice(0, 7) + '…' : name, lx, ly)
     })
@@ -164,7 +309,7 @@ export default function Trajectory() {
     // 已完成的路径段（实线）
     const completedSegs = currentSeg < 0 ? 0 : currentSeg
     for (let i = 0; i < completedSegs && i < pts.length - 1; i++) {
-      drawArrow(ctx, pts[i].px, pts[i].py, pts[i+1].px, pts[i+1].py, '#00d4ff', 1, true)
+      drawArrow(ctx, pts[i].px, pts[i].py, pts[i+1].px, pts[i+1].py, '#1677ff', 1, true)
     }
 
     // 当前正在绘制的箭头（动画中）
@@ -172,13 +317,13 @@ export default function Trajectory() {
       const a = pts[currentSeg], b = pts[currentSeg + 1]
       const tx = a.px + (b.px - a.px) * easeInOut(progress)
       const ty = a.py + (b.py - a.py) * easeInOut(progress)
-      drawArrow(ctx, a.px, a.py, tx, ty, '#00d4ff', easeInOut(progress), false)
+      drawArrow(ctx, a.px, a.py, tx, ty, '#1677ff', easeInOut(progress), false)
 
-      // 动态箭头头部发光
+      // 动态箭头头部
       ctx.beginPath()
       ctx.arc(tx, ty, 6, 0, Math.PI * 2)
-      ctx.fillStyle = '#00d4ff'
-      ctx.shadowBlur = 16; ctx.shadowColor = '#00d4ff'
+      ctx.fillStyle = '#1677ff'
+      ctx.shadowBlur = 10; ctx.shadowColor = '#1677ff66'
       ctx.fill()
       ctx.shadowBlur = 0
     }
@@ -191,43 +336,42 @@ export default function Trajectory() {
       if (i > visibleNodes) return
       const isFirst = i === 0
       const isLast  = i === pts.length - 1 && currentSeg >= pts.length - 1
-      const color   = isFirst ? '#00e5a0' : isLast ? '#ff6b6b' : '#00d4ff'
+      // 亮色主题下使用深色系：起点绿、终点红、途经蓝
+      const color     = isFirst ? '#389e0d' : isLast ? '#cf1322' : '#1677ff'
+      const fillColor = isFirst ? '#f6ffed' : isLast ? '#fff1f0' : '#e6f4ff'
 
-      // 光晕
-      const grd = ctx.createRadialGradient(p.px, p.py, 0, p.px, p.py, 22)
-      grd.addColorStop(0, color + '44')
-      grd.addColorStop(1, 'transparent')
-      ctx.beginPath(); ctx.arc(p.px, p.py, 22, 0, Math.PI * 2)
-      ctx.fillStyle = grd; ctx.fill()
-
-      // 外圆
-      ctx.beginPath(); ctx.arc(p.px, p.py, 14, 0, Math.PI * 2)
-      ctx.strokeStyle = color; ctx.lineWidth = 2
-      ctx.fillStyle = '#080c14'; ctx.fill(); ctx.stroke()
-
-      // 内圆
-      ctx.beginPath(); ctx.arc(p.px, p.py, 7, 0, Math.PI * 2)
-      ctx.fillStyle = color; ctx.fill()
+      // 外圆（白底 + 彩色边框）
+      ctx.beginPath(); ctx.arc(p.px, p.py, 15, 0, Math.PI * 2)
+      ctx.fillStyle = fillColor
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2.5
+      ctx.fill(); ctx.stroke()
 
       // 序号
-      ctx.fillStyle = '#080c14'
-      ctx.font = 'bold 9px sans-serif'
+      ctx.fillStyle = color
+      ctx.font = 'bold 10px sans-serif'
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
       ctx.fillText(p.step, p.px, p.py)
 
-      // 位置名标签
+      // 位置名标签（深色，清晰可读）
       const label = p.camera_location.length > 8 ? p.camera_location.slice(0,8)+'…' : p.camera_location
-      ctx.fillStyle = color
+      const offsetY = p.py > H * 0.8 ? -34 : 28
+
+      // 标签背景
       ctx.font = 'bold 12px Noto Sans SC, sans-serif'
+      const tw = ctx.measureText(label).width
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.fillRect(p.px - tw/2 - 4, p.py + offsetY - 13, tw + 8, 16)
+
+      ctx.fillStyle = color
       ctx.textAlign = 'center'
-      const offsetY = p.py > H * 0.8 ? -30 : 26
       ctx.fillText(label, p.px, p.py + offsetY)
 
       // 时间标签
       const fmtT = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`
-      ctx.fillStyle = '#8899b0'
+      ctx.fillStyle = '#595959'
       ctx.font = '10px IBM Plex Mono, monospace'
-      ctx.fillText(fmtT(p.first_seen), p.px, p.py + offsetY + 16)
+      ctx.fillText(fmtT(p.first_seen), p.px, p.py + offsetY + 14)
     })
   }
 
@@ -239,7 +383,7 @@ export default function Trajectory() {
     ctx.globalAlpha = alpha
     ctx.strokeStyle = color
     ctx.lineWidth = 2.5
-    ctx.shadowBlur = 8; ctx.shadowColor = color + '88'
+    ctx.shadowBlur = 3; ctx.shadowColor = color + '44'
 
     // 线段（不画到终点，留给箭头）
     const endX = withHead ? x2 - Math.cos(angle) * headLen * 0.5 : x2
@@ -291,24 +435,37 @@ export default function Trajectory() {
             <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', marginBottom: 12 }}>
               上传追踪目标
             </div>
-            {preview ? (
-              <div>
-                <img
-                  src={preview} alt="目标"
-                  style={{ width: '100%', borderRadius: 8, marginBottom: 10, maxHeight: 180, objectFit: 'contain', background: 'var(--bg-base)' }}
-                />
-                <Button block onClick={() => { setFile(null); setPreview(null); setResult(null) }}
-                  style={{ borderColor: 'var(--border)', color: 'var(--text-2)', marginBottom: 8 }}>
-                  重新选择
-                </Button>
-              </div>
-            ) : (
+
+            {/* 未选文件 */}
+            {!file && (
               <Dragger
                 accept=".jpg,.jpeg,.png,.bmp,.webp"
                 beforeUpload={() => false}
-                onChange={info => {
+                onChange={async (info) => {
                   const f = info.file.originFileObj || info.file
-                  if (f) { setFile(f); setPreview(URL.createObjectURL(f)); setResult(null) }
+                  if (!f) return false
+                  setFile(f)
+                  setPreview(URL.createObjectURL(f))
+                  setResult(null)
+                  setPersons([])
+                  setImageKey(null)
+                  detectPersonsRef.current = []
+                  detectHovRef.current  = -1
+                  detectSelRef.current  = -1
+                  setDetecting(true)
+                  try {
+                    const { data } = await detectPersons(f)
+                    if (data.success) {
+                      setImageKey(data.image_key)
+                      setPersons(data.persons)
+                    } else {
+                      message.warning(data.error || '人物检测失败，可直接开始追踪')
+                    }
+                  } catch {
+                    message.warning('人物检测失败，可直接开始追踪')
+                  } finally {
+                    setDetecting(false)
+                  }
                   return false
                 }}
                 showUploadList={false}
@@ -320,6 +477,66 @@ export default function Trajectory() {
                   <div style={{ color: 'var(--text-3)', fontSize: 11, marginTop: 4 }}>JPG / PNG / BMP</div>
                 </div>
               </Dragger>
+            )}
+
+            {/* 检测中 */}
+            {file && detecting && (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <Spin />
+                <div style={{ marginTop: 10, color: 'var(--text-3)', fontSize: 11 }}>正在检测人物...</div>
+              </div>
+            )}
+
+            {/* 有人物 → 检测 Canvas */}
+            {file && !detecting && persons.length > 0 && (
+              <div>
+                <div style={{
+                  position: 'relative', borderRadius: 8, overflow: 'hidden',
+                  marginBottom: 8, border: '1px solid var(--border)',
+                }}>
+                  <canvas
+                    ref={detectCanvasRef}
+                    style={{ width: '100%', display: 'block' }}
+                    onMouseMove={handleDetectMouseMove}
+                    onMouseLeave={handleDetectMouseLeave}
+                    onClick={handleDetectClick}
+                  />
+                </div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8,
+                  padding: '4px 7px', background: 'var(--bg-base)', borderRadius: 5,
+                }}>
+                  <AimOutlined style={{ color: 'var(--accent)', fontSize: 11 }} />
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                    检测到&nbsp;<span style={{ color: 'var(--accent)', fontWeight: 600 }}>{persons.length}</span>
+                    &nbsp;个人物，点击框内人物开始追踪
+                  </span>
+                </div>
+                <Button block onClick={() => {
+                  setFile(null); setPreview(null); setResult(null)
+                  setPersons([]); setImageKey(null)
+                  detectPersonsRef.current = []
+                  detectHovRef.current = -1; detectSelRef.current = -1
+                  detectImgRef.current = null
+                }}
+                  style={{ borderColor: 'var(--border)', color: 'var(--text-2)', marginBottom: 0 }}>
+                  重新选择
+                </Button>
+              </div>
+            )}
+
+            {/* 无人物 → 普通预览 */}
+            {file && !detecting && persons.length === 0 && (
+              <div>
+                <img
+                  src={preview} alt="目标"
+                  style={{ width: '100%', borderRadius: 8, marginBottom: 10, maxHeight: 180, objectFit: 'contain', background: 'var(--bg-base)' }}
+                />
+                <Button block onClick={() => { setFile(null); setPreview(null); setResult(null) }}
+                  style={{ borderColor: 'var(--border)', color: 'var(--text-2)', marginBottom: 8 }}>
+                  重新选择
+                </Button>
+              </div>
             )}
 
             {/* 阈值 */}
@@ -341,15 +558,28 @@ export default function Trajectory() {
               </div>
             </div>
 
-            <Button
-              type="primary" block loading={loading}
-              icon={<UserOutlined />}
-              onClick={handleSearch}
-              style={{ marginTop: 14 }}
-              disabled={!file}
-            >
-              开始追踪
-            </Button>
+            {/* 无人物时显示兜底按钮；有人物时提示点击框 */}
+            {persons.length === 0 && (
+              <Button
+                type="primary" block loading={loading}
+                icon={<UserOutlined />}
+                onClick={handleSearch}
+                style={{ marginTop: 12 }}
+                disabled={!file || detecting}
+              >
+                开始追踪
+              </Button>
+            )}
+            {persons.length > 0 && (
+              <Button
+                block loading={loading}
+                icon={<UserOutlined />}
+                onClick={handleSearch}
+                style={{ marginTop: 0, borderColor: 'var(--border)', color: 'var(--text-2)' }}
+              >
+                重新追踪已选人物
+              </Button>
+            )}
           </div>
 
           {/* 动画控制 */}
@@ -475,9 +705,9 @@ export default function Trajectory() {
                 display: 'flex', flexDirection: 'column', gap: 6,
               }}>
                 {[
-                  { color: '#00e5a0', label: '起点' },
-                  { color: '#00d4ff', label: '途经' },
-                  { color: '#ff6b6b', label: '终点' },
+                  { color: '#389e0d', label: '起点' },
+                  { color: '#1677ff', label: '途经' },
+                  { color: '#cf1322', label: '终点' },
                 ].map(({ color, label }) => (
                   <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />
@@ -509,7 +739,7 @@ export default function Trajectory() {
                   const isVisible = !playing ? true : i <= animStep
                   const isFirst = i === 0
                   const isLast  = i === nodes.length - 1
-                  const color   = isFirst ? '#00e5a0' : isLast ? '#ff6b6b' : '#00d4ff'
+                  const color   = isFirst ? '#389e0d' : isLast ? '#cf1322' : '#1677ff'
                   return (
                     <div
                       key={i}

@@ -1,14 +1,15 @@
 import React, { useState } from 'react'
-import { Input, Button, Slider, Tag, Modal, message, Empty } from 'antd'
+import { Input, Button, Slider, Tag, message, Empty } from 'antd'
 import { SearchOutlined, ClockCircleOutlined, EnvironmentOutlined } from '@ant-design/icons'
 import { searchByText, frameUrl } from '../api.js'
+import FramePreviewModal from '../components/FramePreviewModal.jsx'
 
 export default function TextSearch() {
   const [query, setQuery]     = useState('')
   const [topK, setTopK]       = useState(10)
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
-  const [preview, setPreview] = useState(null) // {src, time, score}
+  const [preview, setPreview] = useState(null) // {frame_path,bbox,frame_time,score,video_id,camera_location}
 
   const handleSearch = async () => {
     if (!query.trim()) return message.warning('请输入搜索描述')
@@ -143,7 +144,7 @@ export default function TextSearch() {
                   {r.appearances.slice(0, 8).map((a, j) => (
                     <div
                       key={j}
-                      onClick={() => setPreview({ src: frameUrl(a.frame_path), time: a.frame_time, score: a.score })}
+                      onClick={() => setPreview({ frame_path: a.frame_path, bbox: a.bbox, frame_time: a.frame_time, score: a.score, video_id: r.video_id, camera_location: r.camera_location })}
                       style={{
                         position: 'relative', borderRadius: 6, overflow: 'hidden',
                         border: '1px solid var(--border)', cursor: 'pointer',
@@ -191,24 +192,12 @@ export default function TextSearch() {
         )}
       </div>
 
-      {/* 图片预览弹窗 */}
-      <Modal
+      <FramePreviewModal
         open={!!preview}
-        onCancel={() => setPreview(null)}
-        footer={null}
-        width={800}
-        title={
-          preview && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--accent)' }}>
-              时间: {fmtTime(preview.time)} · 相似度: {(preview.score * 100).toFixed(1)}%
-            </span>
-          )
-        }
-      >
-        {preview && (
-          <img src={preview.src} alt="预览" style={{ width: '100%', borderRadius: 6 }} />
-        )}
-      </Modal>
+        onClose={() => setPreview(null)}
+        appearance={preview}
+        videoInfo={preview && { video_id: preview.video_id, camera_location: preview.camera_location }}
+      />
     </div>
   )
 }

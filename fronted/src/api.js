@@ -41,15 +41,42 @@ export const deleteUser  = (id)                    => api.delete(`/api/auth/user
 // ── 搜索 ──
 export const searchByText  = (query, topK = 10) =>
   api.post('/api/search/text', { query, top_k: topK })
+
+export const detectPersons = (file) => {
+  const fd = new FormData()
+  fd.append('image', file)
+  return api.post('/api/search/detect', fd)
+}
+
 export const searchByImage = (file, topK = 10) => {
   const fd = new FormData()
   fd.append('image', file)
   fd.append('top_k', topK)
   return api.post('/api/search/image', fd)
 }
+
+// 使用 detect 接口已保存的图片 + 用户选中的 bbox 进行搜索
+export const searchByImageKey = (imageKey, bbox, topK = 10) => {
+  const fd = new FormData()
+  fd.append('image_key', imageKey)
+  fd.append('bbox', bbox.join(','))
+  fd.append('top_k', topK)
+  return api.post('/api/search/image', fd)
+}
+
 export const searchTrajectory = (file, threshold = 0.20, topK = 100) => {
   const fd = new FormData()
   fd.append('image', file)
+  fd.append('threshold', threshold)
+  fd.append('top_k', topK)
+  return api.post('/api/search/trajectory', fd)
+}
+
+// 使用 detect 接口已保存的图片 + 用户选中的 bbox 进行轨迹追踪
+export const searchTrajectoryByKey = (imageKey, bbox, threshold = 0.20, topK = 100) => {
+  const fd = new FormData()
+  fd.append('image_key', imageKey)
+  fd.append('bbox', bbox.join(','))
   fd.append('threshold', threshold)
   fd.append('top_k', topK)
   return api.post('/api/search/trajectory', fd)
@@ -81,6 +108,17 @@ export const rebuildIndex = () => api.post('/api/data/rebuild_index')
 export const getHistory    = (params = {}) => api.get('/api/history/', { params })
 export const deleteHistory = (id)          => api.delete(`/api/history/${id}`)
 export const clearHistory  = (type)        => api.delete('/api/history/', { params: type ? { type } : {} })
+
+// 使用数据库已有帧的 bbox 区域进行搜索（image 或 trajectory）
+export const searchFromFrame = (framePath, bbox, searchType = 'image', topK = 10, threshold = 0.20) => {
+  const fd = new FormData()
+  fd.append('frame_path', framePath)
+  fd.append('bbox', bbox)            // "x,y,w,h"
+  fd.append('search_type', searchType)
+  fd.append('top_k', topK)
+  fd.append('threshold', threshold)
+  return api.post('/api/search/from_frame', fd)
+}
 
 // ── 帧图片 / 视频流 URL ──
 export const frameUrl    = (path) =>
